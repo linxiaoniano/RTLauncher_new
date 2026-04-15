@@ -80,7 +80,7 @@ jobs:
         run: pnpm install
 
       - name: Build frontend
-        run: pnpm build -- --webpack
+        run: pnpm build
 
       # 构建 Rust 后端 (aarch64)
       - name: Build Tauri for aarch64
@@ -209,7 +209,7 @@ jobs:
         run: pnpm install
 
       - name: Build frontend
-        run: pnpm build -- --webpack
+        run: pnpm build
 
       - name: Build static binary
         run: |
