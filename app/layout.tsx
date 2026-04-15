@@ -1,0 +1,61 @@
+import type { Metadata } from "next";
+import { Geist, Geist_Mono, Figtree } from "next/font/google";
+import "./globals.css";
+import { TitleBar } from "@/components/title-bar";
+import { Sidebar } from "@/components/sidebar";
+import { ThemeProvider } from "@/components/theme-provider";
+import { TooltipProvider } from "@/components/ui/tooltip";
+
+const figtree = Figtree({ subsets: ["latin"], variable: "--font-sans" });
+
+const geistSans = Geist({
+  variable: "--font-geist-sans",
+  subsets: ["latin"],
+});
+
+const geistMono = Geist_Mono({
+  variable: "--font-geist-mono",
+  subsets: ["latin"],
+});
+
+export const metadata: Metadata = {
+  title: "RTLauncher",
+  description: "RTLauncher Desktop App",
+};
+
+export default function RootLayout({
+  children,
+}: Readonly<{
+  children: React.ReactNode;
+}>) {
+  return (
+    <html lang="zh-CN" className={figtree.variable} suppressHydrationWarning>
+      <body
+        className={`${geistSans.variable} ${geistMono.variable} ${figtree.variable} antialiased h-screen flex flex-col overflow-hidden bg-background`}
+      >
+        <ThemeProvider
+          attribute="class"
+          defaultTheme="system"
+          enableSystem
+          disableTransitionOnChange
+        >
+          {/* 背景装饰光斑 */}
+          <div className="fixed inset-0 overflow-hidden pointer-events-none">
+            <div className="glass-orb glass-orb-1" />
+            <div className="glass-orb glass-orb-2" />
+            <div className="glass-orb glass-orb-3" />
+          </div>
+
+          <TooltipProvider>
+            <TitleBar />
+
+            <div className="flex flex-1 overflow-hidden relative z-10">
+              <Sidebar />
+              <main className="flex-1 overflow-auto">{children}</main>
+            </div>
+          </TooltipProvider>
+        </ThemeProvider>
+      </body>
+    </html>
+  );
+}

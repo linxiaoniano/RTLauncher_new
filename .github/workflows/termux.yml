@@ -1,0 +1,245 @@
+name: 'Build Termux Android ARM64 Package'
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build-termux:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 设置前端环境
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 8
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: 'pnpm'
+
+      # 安装交叉编译工具链
+      - name: Install cross-compilation toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            curl \
+            git \
+            file \
+            libssl-dev \
+            pkg-config \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            gcc-aarch64-linux-gnu \
+            g++-aarch64-linux-gnu
+
+      # 安装 Rust 并添加 aarch64 目标
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-gnu
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      # 配置交叉编译
+      - name: Configure cross compilation
+        run: |
+          mkdir -p ~/.cargo
+          cat >> ~/.cargo/config.toml << 'EOF'
+          [target.aarch64-unknown-linux-gnu]
+          linker = "aarch64-linux-gnu-gcc"
+          ar = "aarch64-linux-gnu-ar"
+          
+          [env]
+          PKG_CONFIG_PATH = ""
+          PKG_CONFIG_LIBDIR = "/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
+          PKG_CONFIG_SYSROOT_DIR = "/"
+          EOF
+
+      # 安装前端依赖并构建
+      - name: Install frontend dependencies
+        run: pnpm install
+
+      - name: Build frontend
+        run: pnpm build -- --webpack
+
+      # 构建 Rust 后端 (aarch64)
+      - name: Build Tauri for aarch64
+        run: |
+          cd src-tauri
+          cargo build --release --target aarch64-unknown-linux-gnu
+
+      # 创建 Termux deb 包
+      - name: Create Termux deb package
+        run: |
+          VERSION="${{ github.ref_name }}"
+          if [[ "$VERSION" == v* ]]; then
+            VERSION="${VERSION#v}"
+          else
+            VERSION="0.1.0-$(git rev-parse --short HEAD)"
+          fi
+          
+          # 创建 deb 包目录结构
+          PKG_DIR="rtlauncher-termux_${VERSION}_aarch64"
+          mkdir -p "$PKG_DIR/DEBIAN"
+          mkdir -p "$PKG_DIR/data/data/com.termux/files/usr/bin"
+          mkdir -p "$PKG_DIR/data/data/com.termux/files/usr/lib/rtlauncher"
+          mkdir -p "$PKG_DIR/data/data/com.termux/files/usr/share/applications"
+          mkdir -p "$PKG_DIR/data/data/com.termux/files/usr/share/pixmaps"
+          
+          # 复制二进制文件
+          cp src-tauri/target/aarch64-unknown-linux-gnu/release/rtlauncher \
+             "$PKG_DIR/data/data/com.termux/files/usr/bin/rtlauncher"
+          
+          # 复制前端资源
+          cp -r out/* "$PKG_DIR/data/data/com.termux/files/usr/lib/rtlauncher/"
+          
+          # 复制图标
+          cp src-tauri/icons/128x128.png \
+             "$PKG_DIR/data/data/com.termux/files/usr/share/pixmaps/rtlauncher.png"
+          
+          # 创建 desktop 文件
+          cat > "$PKG_DIR/data/data/com.termux/files/usr/share/applications/rtlauncher.desktop" << 'EOF'
+          [Desktop Entry]
+          Version=1.0
+          Name=RTLauncher
+          Comment=Minecraft Launcher
+          Exec=rtlauncher
+          Icon=rtlauncher
+          Terminal=false
+          Type=Application
+          Categories=Game;
+          EOF
+          
+          # 创建 control 文件
+          cat > "$PKG_DIR/DEBIAN/control" << EOF
+          Package: rtlauncher
+          Version: ${VERSION}
+          Section: games
+          Priority: optional
+          Architecture: aarch64
+          Maintainer: Lighting-Team
+          Description: Minecraft Launcher for Termux/Android
+           RTLauncher is a modern Minecraft launcher built with Tauri.
+           This package is optimized for Termux on Android ARM64.
+          Depends: gtk3, webkitgtk-6.0
+          Homepage: https://github.com/Lighting-Team/RTLauncher
+          EOF
+          
+          # 创建 postinst 脚本
+          cat > "$PKG_DIR/DEBIAN/postinst" << 'EOF'
+          #!/bin/bash
+          chmod +x /data/data/com.termux/files/usr/bin/rtlauncher
+          EOF
+          chmod 755 "$PKG_DIR/DEBIAN/postinst"
+          
+          # 构建 deb 包
+          dpkg-deb --build --root-owner-group "$PKG_DIR"
+          
+          echo "artifact_name=$PKG_DIR.deb" >> $GITHUB_OUTPUT
+
+      - name: Rename package
+        run: |
+          VERSION="${{ github.ref_name }}"
+          if [[ "$VERSION" == v* ]]; then
+            VERSION="${VERSION#v}"
+          else
+            VERSION="0.1.0-$(git rev-parse --short HEAD)"
+          fi
+          mv rtlauncher-termux_${VERSION}_aarch64.deb rtlauncher-termux_aarch64.deb || true
+          ls -la *.deb || true
+
+      - name: Upload Termux deb package
+        uses: actions/upload-artifact@v4
+        with:
+          name: rtlauncher-termux-aarch64
+          path: '*.deb'
+          if-no-files-found: warn
+
+  # 备选方案：使用预构建的静态二进制
+  build-static:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 8
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-musl
+
+      - name: Install musl tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools musl-dev
+
+      - name: Install frontend dependencies
+        run: pnpm install
+
+      - name: Build frontend
+        run: pnpm build -- --webpack
+
+      - name: Build static binary
+        run: |
+          cd src-tauri
+          # 尝试静态构建
+          RUSTFLAGS="-C target-feature=+crt-static" \
+          cargo build --release --target aarch64-unknown-linux-musl || \
+          cargo build --release --target aarch64-unknown-linux-musl
+        continue-on-error: true
+
+      - name: Package release
+        run: |
+          VERSION="${{ github.ref_name }}"
+          if [[ "$VERSION" == v* ]]; then
+            VERSION="${VERSION#v}"
+          else
+            VERSION="0.1.0-$(git rev-parse --short HEAD)"
+          fi
+          
+          mkdir -p release
+          if [ -f src-tauri/target/aarch64-unknown-linux-musl/release/rtlauncher ]; then
+            cp src-tauri/target/aarch64-unknown-linux-musl/release/rtlauncher release/
+          fi
+          cp -r out release/www
+          
+          tar -czvf rtlauncher-aarch64-${VERSION}.tar.gz -C release .
+          
+      - name: Upload static build
+        uses: actions/upload-artifact@v4
+        with:
+          name: rtlauncher-static-aarch64
+          path: '*.tar.gz'
+          if-no-files-found: ignore
